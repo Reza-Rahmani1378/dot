@@ -1,0 +1,220 @@
+#!/bin/bash
+set -e
+
+# This zet script is a multicall executable, which means you may have
+# opened another file or link which opened this.
+#
+# Add the following to bashrc to enable completion (replace zet with
+# your multicall executable name):
+#
+#   complete -C zet zet
+#
+# Note that you will need one such complete line for every multicall
+# variation of this script (ex: ln -s zet log; complete -C log log)
+
+#test -z "$GITUSER" && echo "GITUSER not set." && exit 1
+
+# Check for $ZETDIR or $KN variables (in that order). If found, use
+# those variables for the parent directory. If they do not exist, check
+# for the existance of the default directory and create the folder if
+# necessary. This not only allows for customization of the parent
+# directory via $ZETDIR, but also allows for compatibility with the
+# KEG/KN toolset. This directory is expected to contain one or more
+# subdirectories, each of which is usually a git repository that directly
+# matches the name of the multicall executable (ex: $ZETDIR/zet).
+
+#test -d "$ZETDIR" && ZETDIR="$ZETDIR"
+#test -d "$KN" && ZETDIR="$KN"
+
+EXE=${0##*/}
+test -z "$EXE" && echo "Could not determine name of executable." && exit 1
+#DIR="$ZETDIR"
+DIR="$HOME/vasl/notes/"
+
+# ------------------------- complete context -------------------------
+
+declare -a COMMANDS=(usage a add q query text d dir e edit id urlencode titles last title body before after ids)
+
+if [[ -n $COMP_LINE ]]; then
+    for c in "${COMMANDS[@]}"; do
+        [[ ${c:0:${#2}} == "${2,,}" ]] && echo "$c"
+    done
+    exit
+fi
+
+# ----------------------------- commands -----------------------------
+
+_usage() {
+    local cmds="${COMMANDS[@]}"
+    printf "usage: ${0##*/} (${cmds// /|})\n"
+}
+
+_urlencode() {
+  local string="$*"
+  if [[ -z $string ]]; then
+    local IFS=$'\n'
+    while read -r line; do
+      _urlencode "$line"
+    done
+  fi
+  local strlen=${#string}
+  local encoded=""
+  local pos c o
+  for ((pos = 0; pos < strlen; pos++)); do
+    c=${string:$pos:1}
+    case "$c" in
+    [-_.~a-zA-Z0-9]) o="${c}" ;;
+    *) printf -v o '%%%02x' "'$c" ;;
+    esac
+    encoded+="${o}"
+  done
+  echo "${encoded}"
+}
+
+_id() { date -u +%Y%m%d%H%M%S; }
+
+_dir() { [[ -d $DIR ]] && echo "$DIR"; }
+_d() { _dir "$@"; }
+
+# Add creates a Zettelkasten repo entry with an isosec unique directory
+# name within the $KN/$EXE parent directory. Whatever the effective name
+# of the executable (multicall, symlink, hardlink, alias, copy) will be
+# used for $EXE. Opens editor with $EDITOR or vim.  Git commits using
+# the first 50 characters of the first line (ignoring heading hashtags
+# if prefixed) and pushes. Designed to be used in situations where
+# commiting and pushing to main/master is allowed (which is usually fine
+# for knowledge repos).
+
+_add() {
+  echo $DIR
+  echo $_d
+  local dir="$(_d)/$(_id)"
+  local readme="$dir/README.md"
+  mkdir -p "$dir"
+  vim "$readme"
+  cd "$dir"
+  # remove zet if it's zero line
+  if [[ ! -s "$dir/README.md" ]]; then
+    cd ..
+    rm -rf $dir
+    exit 0
+  fi
+  line=$(head -1 "$dir/README.md" | sed 's/#\+ *//')
+  test -n "$line"
+  echo "Adding: $line"
+  echo "dir : $dir"
+  git add -A "$dir"
+  git commit -m "$line"
+  git push
+}
+_a() { _add "$@"; }
+
+_edit() {
+  local dir="$(_d)"
+  local readme="$dir/$1/README.md"
+  line=$(head -1 "$dir/$1/README.md" | sed 's/#\+ *//')
+  echo "Editing : $dir/$1"
+  vim "$readme"
+  git add "$dir"
+  git commit -m "Update $line "
+  git push
+  [[ ! -r $readme ]] && echo "Not found." && return 1
+  # TODO prompt for "save" (git commit)
+}
+_e() { _edit "$@"; }
+
+_titles() {
+  local dir=$(_d)
+  local -a zets=($(find "$dir" -maxdepth 2 -type d -path '*/20*'|sort ))
+  local IFS=$'\n'
+  local buf
+  for i in ${zets[@]}; do
+    [[ -r "$i/README.md" ]] || continue
+    local title=$(head -1 "$i/README.md")
+    [[ $title =~ ^#\  ]] || title="<untitled>"
+    title="${title#*# }"
+    buf="$buf${i##*/} ${title#*# }  "$'\n'
+  done
+  pandoc -t plain --wrap=none <<< "$buf"
+}
+
+_last() {
+  local line=$(_titles | tail -1)
+  echo "* [${line#* }](https://github.com/Reza-Rahmani1378/zet/tree/main/${line%% *})"
+}
+
+_text() {
+  local dir="$(_d)/$1"
+  local readme="$dir/README.md"
+  [[ -r $readme ]] || return 1
+  local pandoc=$(command -v pandoc)
+  [[ -z $pandoc ]] && echo "'$EXE text' requires pandoc" && return 1
+  pandoc -t plain --wrap=none < "$readme"
+}
+
+_title() {
+  local dir="$(_d)/$1"
+  [[ -d $dir ]] || return 1
+  local readme="$dir/README.md"
+  read -r title < $readme
+  [[ ! $title =~ ^#\  ]] && return 1
+  pandoc -t plain --wrap=none <<< "${title#\# }"
+}
+
+_body() {
+  local dir="$(_d)/$1"
+  [[ -d $dir ]] || return 1
+  local readme="$dir/README.md"
+  local buf=$(<$readme)
+  local eol=$'\n'
+  [[ $buf =~ ^\#\  ]] && buf=${buf#*$eol$eol} 
+  buf=${buf#📺 *$eol$eol}
+  pandoc -t plain --wrap=none <<< "$buf"
+}
+
+_query() {
+  [[ -z "$1" ]] && echo "Missing search query." && return 1
+  term="$*"
+  it="https://github.com/Reza-Rahmani1378/$EXE/search?q=$(_urlencode $term)"
+  echo "[$term]: <$it>"
+#  local chat=$(command -v chat)
+#  [[ -z $chat ]] && return 0
+#  exec chat "$it"
+}
+_q() { _query "$@"; }
+
+_ids() {
+  while read -r line; do
+    echo "${line##*/}"
+  done < <(find "$(_d)" -maxdepth 2 -type d -path '*/20*'| sort)
+}
+
+_before() {
+  local id="$1"
+  local prev
+  while read -r cur; do
+    (( cur > id )) && break
+    prev=$cur
+  done < <(_ids)
+  echo "$prev"
+}
+
+_after() {
+  local id="$1"
+  while read -r cur; do
+    (( cur > id )) && break
+  done < <(_ids)
+  echo "$cur"
+}
+
+# ---------------------------- delegation ----------------------------
+
+declare cmd="$1"; shift
+for c in "${COMMANDS[@]}"; do
+    if [[ $c == "$cmd" ]]; then
+      "_$cmd" "$@"
+      exit $?
+    fi
+done
+
+_usage "$@"
