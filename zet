@@ -114,9 +114,13 @@ _edit() {
   local readme="$dir/$1/README.md"
   line=$(head -1 "$dir/$1/README.md" | sed 's/#\+ *//')
   echo "Editing : $dir/$1"
+  echo "dir : $dir "
   vim "$readme"
+  cd "$dir"
+  line=$(head -1 "$dir/$1/README.md" | sed 's/#\+ *//')
+  echo "line : $line"
   git add "$dir"
-  git commit -m "Update $line "
+  git commit -m "Update $line"
   git push
   [[ ! -r $readme ]] && echo "Not found." && return 1
   # TODO prompt for "save" (git commit)
